@@ -1,3 +1,4 @@
+
 # RL Trading Bot
 
 An AI-powered trading bot built using **Reinforcement Learning (RL)**. The bot is trained using the **Proximal Policy Optimization (PPO)** algorithm to make buy, sell, or hold decisions in a simulated trading environment. This project uses historical stock data to train and test the trading agent.
@@ -24,31 +25,35 @@ Ensure you have the following installed:
 Install the required Python libraries:
 ```bash
 pip install -r requirements.txt
+```
 
-Required Libraries
-gymnasium
-numpy
-pandas
-stable-baselines3
-matplotlib
-yfinance (if using Yahoo Finance for data fetching)
-alpha_vantage (optional, if using Alpha Vantage API)
+### Required Libraries
 
+- `gymnasium`
+- `numpy`
+- `pandas`
+- `stable-baselines3`
+- `matplotlib`
+- `yfinance` (if using Yahoo Finance for data fetching)
+- `alpha_vantage` (optional, if using Alpha Vantage API)
 
-etup
-1. Clone the Repository
-bash
-Copy
-Edit
+---
+
+## Setup
+
+### 1. Clone the Repository
+```bash
 git clone https://github.com/your-repo-url/rl-trading-bot.git
 cd rl-trading-bot
-2. Fetch Stock Data
-Option 1: Alpha Vantage API
-Create a file named fetch_data.py and use the following script to download stock data:
+```
 
-python
-Copy
-Edit
+---
+
+## Code
+
+### Fetch Stock Data (`fetch_data.py`)
+
+```python
 from alpha_vantage.timeseries import TimeSeries
 import pandas as pd
 
@@ -61,18 +66,10 @@ def fetch_stock_data(symbol="AAPL", output_file="AAPL_data.csv"):
     print(f"Data saved to {output_file}")
 
 fetch_stock_data()
-Option 2: Yahoo Finance
-Install the yfinance library:
+```
 
-bash
-Copy
-Edit
-pip install yfinance
-Run the following script to fetch stock data:
-
-python
-Copy
-Edit
+If you want to use Yahoo Finance instead:
+```python
 import yfinance as yf
 
 def fetch_stock_data(symbol="AAPL", output_file="AAPL_data.csv"):
@@ -81,40 +78,162 @@ def fetch_stock_data(symbol="AAPL", output_file="AAPL_data.csv"):
     print(f"Data saved to {output_file}")
 
 fetch_stock_data()
-Ensure the data is saved as AAPL_data.csv in the project directory.
+```
 
-Usage
-1. Training the Agent
-Train the PPO agent using the historical stock data:
+---
 
-bash
-Copy
-Edit
-python train_agent.py
-This will:
+### Custom Trading Environment (`trading_env.py`)
 
-Train the agent for a specified number of timesteps.
-Save the trained model as ppo_trading_agent.zip.
-2. Testing the Agent
-Evaluate the agent's performance:
+```python
+import gymnasium as gym
+from gymnasium import spaces
+import numpy as np
+import pandas as pd
 
-bash
-Copy
-Edit
-python test_agent.py
-This will:
+class TradingEnv(gym.Env):
+    def __init__(self, data, initial_balance=10000):
+        super(TradingEnv, self).__init__()
+        self.data = data.copy()
+        self.initial_balance = initial_balance
+        self.current_step = 0
+        self.balance = initial_balance
+        self.shares = 0
 
-Load the trained model.
-Test the agent using the historical stock data.
-Save the results as test_results.csv.
-3. Visualizing Results
-Generate performance plots:
+        # Add technical indicators
+        self.data['MA_20'] = self.data['Close'].rolling(window=20).mean()
+        self.data['MA_50'] = self.data['Close'].rolling(window=50).mean()
+        self.data['RSI'] = self._calculate_rsi(self.data['Close'])
+        self.data = self.data.dropna()
 
-bash
-Copy
-Edit
-python plot_results.py
-This will:
+        self.action_space = spaces.Discrete(3)
+        self.observation_space = spaces.Box(
+            low=0, high=1, shape=(len(self.data.columns),), dtype=np.float32
+        )
 
-Plot total assets over time.
-Plot rewards over time.
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        self.current_step = 0
+        self.balance = self.initial_balance
+        self.shares = 0
+        return self._get_observation(), {}
+
+    def step(self, action):
+        current_price = self.data.iloc[self.current_step]['Close']
+        reward = 0
+
+        if action == 1:  # Buy
+            shares_to_buy = self.balance // current_price
+            self.shares += shares_to_buy
+            self.balance -= shares_to_buy * current_price
+        elif action == 2:  # Sell
+            self.balance += self.shares * current_price
+            self.shares = 0
+
+        total_assets = self.balance + (self.shares * current_price)
+        reward = ((total_assets - self.initial_balance) / 1e3)
+
+        self.current_step += 1
+        terminated = self.current_step >= len(self.data) - 1
+        truncated = False
+
+        return self._get_observation(), reward, terminated, truncated, {}
+
+    def render(self):
+        current_price = self.data.iloc[self.current_step]['Close']
+        total_assets = self.balance + (self.shares * current_price)
+        print(f"Step: {self.current_step}, Balance: {self.balance:.2f}, Shares: {self.shares}, Total Assets: {total_assets:.2f}")
+
+    def _get_observation(self):
+        obs = self.data.iloc[self.current_step].values / self.data.iloc[0].values
+        return obs
+
+    @staticmethod
+    def _calculate_rsi(prices, window=14):
+        delta = prices.diff()
+        gain = delta.where(delta > 0, 0).rolling(window=window).mean()
+        loss = -delta.where(delta < 0, 0).rolling(window=window).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+```
+
+---
+
+### Train the Agent (`train_agent.py`)
+
+```python
+from stable_baselines3 import PPO
+from trading_env import TradingEnv
+import pandas as pd
+
+data = pd.read_csv("AAPL_data.csv", index_col="date", parse_dates=True)
+env = TradingEnv(data)
+
+model = PPO("MlpPolicy", env, verbose=1, learning_rate=0.00005, gamma=0.995, clip_range=0.1)
+model.learn(total_timesteps=300000)
+model.save("./ppo_trading_agent.zip")
+```
+
+---
+
+### Test the Agent (`test_agent.py`)
+
+```python
+from stable_baselines3 import PPO
+from trading_env import TradingEnv
+import pandas as pd
+
+data = pd.read_csv("AAPL_data.csv", index_col="date", parse_dates=True)
+env = TradingEnv(data)
+
+model = PPO.load("./ppo_trading_agent.zip")
+obs, info = env.reset()
+terminated, truncated = False, False
+
+while not (terminated or truncated):
+    action, _ = model.predict(obs)
+    obs, reward, terminated, truncated, info = env.step(action)
+```
+
+---
+
+### Plot Results (`plot_results.py`)
+
+```python
+import pandas as pd
+import matplotlib.pyplot as plt
+
+results = pd.read_csv("test_results.csv")
+
+plt.figure(figsize=(10, 6))
+plt.plot(results["Step"], results["Total Assets"], label="Total Assets")
+plt.title("Agent Performance Over Time")
+plt.xlabel("Step")
+plt.ylabel("Total Assets")
+plt.legend()
+plt.grid()
+plt.show()
+
+plt.figure(figsize=(10, 6))
+plt.plot(results["Step"], results["Reward"], label="Reward", color="orange")
+plt.title("Rewards Over Time")
+plt.xlabel("Step")
+plt.ylabel("Reward")
+plt.legend()
+plt.grid()
+plt.show()
+```
+
+---
+
+## Results
+
+- **Agent Performance Over Time**: Shows the growth of total assets as the agent trades.
+- **Rewards Over Time**: Tracks the agent's rewards for each step.
+
+---
+
+## Future Improvements
+
+- Integrate live trading functionality with APIs like Alpaca or Interactive Brokers.
+- Add support for multiple stocks and portfolio management.
+- Implement advanced RL algorithms (e.g., DDPG, SAC).
